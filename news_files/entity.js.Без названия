@@ -1,0 +1,222 @@
+;(function() {
+	BX.namespace('BX.External.Notification');
+
+	BX.External.Notification.Entity = function() {
+		this.delayedEvents = [];
+
+		return this;
+	};
+
+	let Manager = BX.External.NotificationManager;
+	const START_SHOW_EVENT = 'START_SHOW';
+
+	BX.External.Notification.Entity.prototype = {
+		constructor: BX.External.Notification.Entity,
+		initParameters: function(loadingEntity) {
+			this.delayedEvents = [];
+			this.loadingEntity = loadingEntity || {};
+			if (BX.type.isFunction(Manager.initEventManager) && this.notification)
+			{
+				Manager.initEventManager(this);
+			}
+		},
+		/**
+		 * @param {BX.External.Notification.Event} eventManager
+		 */
+		setEventManager: function(eventManager) {
+			this.eventManager = eventManager;
+			if (this.delayedEvents.length > 0)
+			{
+				for (let i = 0; i < this.delayedEvents.length; i++)
+				{
+					eventManager.onEvent.apply(eventManager, this.delayedEvents[i]);
+				}
+			}
+		},
+		/**
+		 * @return {BX.External.Notification.Event}
+		 */
+		getEventManager: function() {
+			return this.eventManager;
+		},
+		onEvent: function(eventName, isNeedImmediatelySend, parameters) {
+			let eventManager = this.getEventManager();
+			if (eventManager)
+			{
+				eventManager.onEvent.apply(eventManager, arguments);
+			}
+			else
+			{
+				this.delayedEvents.push(arguments);
+			}
+		},
+		create: function(notification) {
+		},
+		setShowNotification: function() {
+			this.onEvent(START_SHOW_EVENT, true);
+			Manager.setShowNotification(this.notification);
+		},
+		checkStyleIsLoaded: function(callback) {
+			callback = callback || function() {};
+			if(this.resources.css_load_checker)
+			{
+				const styleClasses = Object.keys(this.resources.css_load_checker);
+				if(styleClasses.length === 0)
+				{
+					this.styleIsLoaded = true;
+				}
+			}
+			else
+			{
+				this.styleIsLoaded = true;
+			}
+			if (this.styleIsLoaded)
+			{
+				callback();
+			}
+			else
+			{
+				if (!this.isStyleLoadInit)
+				{
+					this.styleLoadNodes = {};
+					for (let styleClass in this.resources.css_load_checker)
+					{
+						const index = this.resources.css_load_checker[styleClass];
+						const node = document.createElement('div');
+						node.style.display = 'none';
+						node.style.position = 'relative';
+						BX.addClass(node, styleClass);
+						document.body.appendChild(node);
+						this.styleLoadNodes[styleClass] = {
+							index: index,
+							node: node
+						}
+					}
+
+					this.loadRetries = 0;
+					this.isStyleLoadInit = true;
+				}
+				else
+				{
+					this.loadRetries++;
+				}
+
+				let allIsLoaded = true;
+				for (let styleClass in this.styleLoadNodes)
+				{
+					const node = this.styleLoadNodes[styleClass].node;
+					const index = this.styleLoadNodes[styleClass].index;
+					const style = window.getComputedStyle(node);
+					if (style.zIndex !== index)
+					{
+						allIsLoaded = false;
+						break;
+					}
+				}
+
+				if(allIsLoaded)
+				{
+					this.styleIsLoaded = true;
+					callback();
+				}
+				else
+				{
+					if (this.loadRetries < 20)
+					{
+						setTimeout(BX.delegate(function() {
+							this.checkStyleIsLoaded(callback);
+						}, this), 250);
+					}
+				}
+			}
+		},
+	};
+
+	Object.defineProperties(
+		BX.External.Notification.Entity.prototype,
+		{
+			helpdeskDomain: {
+				get: function() {
+					if (Manager && BX.type.isFunction(Manager.getHelpdeskDomain))
+					{
+						return Manager.getHelpdeskDomain()
+					}
+
+					return '';
+				}
+			},
+			allTrackingEvents: {
+				get: function() {
+					return this.commonTrackingEvent.concat(this.trackingEvents);
+				}
+			},
+			commonTrackingEvent: {
+				get: function() {
+					return [
+						START_SHOW_EVENT
+					];
+				}
+			},
+			trackingEvents: {
+				get: function() {
+					return [];
+				}
+			},
+			additionalParameters: {
+				get: function() {
+					if (this.resources)
+					{
+						return this.resources.additionalParameters || {};
+					}
+
+					return {};
+				}
+			},
+			resources: {
+				get: function() {
+					if (BX.type.isNotEmptyObject(this.loadingEntity))
+					{
+						return this.loadingEntity.resources;
+					}
+
+					return null;
+				}
+			},
+			notification: {
+				get: function() {
+					if (BX.type.isNotEmptyObject(this.loadingEntity))
+					{
+						return this.loadingEntity.notification;
+					}
+
+					return null;
+				}
+			},
+			notificationId: {
+				get: function() {
+					if (BX.type.isNotEmptyObject(this.notification))
+					{
+						return this.notification.ID;
+					}
+
+					return 0;
+				}
+			},
+			notificationManagerExists: {
+				get: function() {
+					return !!Manager;
+				}
+			},
+			buttonsJsClass: {
+				get: function() {
+					if(this.resources)
+					{
+						return this.resources.buttonsJsClass || '';
+					}
+
+					return '';
+				}
+			},
+		}
+	)
+})();

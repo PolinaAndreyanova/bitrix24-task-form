@@ -1,0 +1,237 @@
+;(function() {
+	let namespace = 'BX.External.Notification';
+	BX.namespace(namespace);
+	let Manager = BX.External.Notification.Manager;
+
+	BX.External.Notification.Event = function(parameters) {
+		parameters = parameters || {};
+		this.entity = parameters.entity;
+		this.clearDelayedEventForSending();
+
+		return this;
+	};
+
+	BX.External.Notification.Event.prototype = {
+		onEvent: function(eventName, isNeedImmediatelySend, parameters) {
+			BX.onCustomEvent(this, eventName);
+			if (this.isEventParamsCorrect)
+			{
+				parameters = parameters || {};
+				let eventData = {};
+				for (let parameter in parameters)
+				{
+					if (parameters.hasOwnProperty(parameter))
+					{
+						eventData[parameter] = parameters[parameter];
+					}
+				}
+				eventData[this.typeParamName] = eventName;
+				let now = new Date();
+				eventData.timestamp = now.getTime();
+				eventData.offset = now.getTimezoneOffset();
+				this.addDelayedEvent(eventData, isNeedImmediatelySend);
+			}
+		},
+
+		getEventUrl: function() {
+			return this.helpdeskDomain + this.path;
+		},
+
+		addNotifyDataParams: function(data) {
+			if (this.isEventParamsCorrect)
+			{
+				if (BX.type.isFunction(Manager.getNotifyData))
+				{
+					Manager.addNotifyDataParams(data);
+				}
+			}
+		},
+
+		addDelayedEvent: function(event, isNeedImmediatelySend) {
+			event = event || {};
+			isNeedImmediatelySend = isNeedImmediatelySend === true;
+
+			if (BX.type.isNotEmptyString(event[this.typeParamName]))
+			{
+				if (this.trackingEvents.indexOf(event[this.typeParamName]) !== -1)
+				{
+					this.eventDataDelayedActions.push(event);
+					this.hasDelayedEvents = true;
+				}
+			}
+
+			if (this.hasDelayedEvents)
+			{
+				clearTimeout(this.sendEventNotificationTimer);
+				if (isNeedImmediatelySend)
+				{
+					this.sendEvents();
+				}
+				else
+				{
+					this.sendEventNotificationTimer = setTimeout(BX.delegate(this.sendEvents, this), 500);
+				}
+			}
+		},
+
+		sendEvents: function() {
+			BX.ajax({
+				method: "POST",
+				dataType: 'json',
+				url: this.getEventUrl(),
+				data: this.getDelayedEventForSending(),
+				onsuccess: BX.delegate(function(result) {
+
+				}, this)
+			});
+			this.clearDelayedEventForSending();
+		},
+
+		getDelayedEventForSending: function() {
+			var batchEventData = {
+				events: this.eventDataDelayedActions
+			};
+
+			batchEventData[this.authParamName] = this.auth;
+			batchEventData[this.notificationIdParamName] = this.notificationId;
+			this.addNotifyDataParams(batchEventData);
+			return batchEventData;
+		},
+
+		clearDelayedEventForSending: function() {
+			this.eventDataDelayedActions = [];
+			this.hasDelayedEvents = false;
+		},
+	};
+
+	Object.defineProperties(
+		BX.External.Notification.Event.prototype,
+		{
+			service: {
+				get: function() {
+					if (Manager && Manager.eventService)
+					{
+						return Manager.eventService;
+					}
+
+					return null;
+				}
+			},
+			notificationId: {
+				get: function() {
+					if (this.entity && this.entity.notification && !isNaN(this.entity.notification.ID))
+					{
+						return parseInt(this.entity.notification.ID);
+					}
+
+					return 0;
+				}
+			},
+			trackingEvents: {
+				get: function() {
+					if (this.entity)
+					{
+						return this.entity.allTrackingEvents || [];
+					}
+
+					return [];
+				}
+			},
+			notification: {
+				get: function() {
+					if (this.entity && this.entity.notification)
+					{
+						return this.entity.notification || null;
+					}
+
+					return null;
+				}
+			},
+			auth: {
+				get: function() {
+					if (this.notification && this.notification.AUTH)
+					{
+						return this.entity.notification.AUTH;
+					}
+
+					return '';
+				}
+			},
+			authParamName: {
+				get: function() {
+					let service = this.service;
+					if (service)
+					{
+						return service.authParamName;
+					}
+				}
+			},
+			path: {
+				get: function() {
+					let service = this.service;
+					if (service)
+					{
+						return service.path;
+					}
+				}
+			},
+			notificationIdParamName: {
+				get: function() {
+					let service = this.service;
+					if (service)
+					{
+						return service.notificationIdParamName;
+					}
+				}
+			},
+			typeParamName: {
+				get: function() {
+					let service = this.service;
+					if (service)
+					{
+						return service.typeParamName;
+					}
+				}
+			},
+			helpdeskDomain: {
+				get: function() {
+					if (BX.type.isFunction(Manager.getHelpdeskDomain))
+					{
+						return Manager.getHelpdeskDomain() || '';
+					}
+
+					return '';
+				}
+			},
+			isEventParamsCorrect: {
+				get: function() {
+					let isCorrect = true;
+					let service = this.service;
+					if (!BX.type.isNotEmptyString(this.auth))
+					{
+						isCorrect = false;
+					}
+					if (!BX.type.isNotEmptyString(this.path))
+					{
+						isCorrect = false;
+					}
+					if (!BX.type.isNotEmptyString(this.notificationIdParamName))
+					{
+						isCorrect = false;
+					}
+					if (!BX.type.isNotEmptyString(this.authParamName))
+					{
+						isCorrect = false;
+					}
+
+					return isCorrect;
+				}
+			},
+		}
+	);
+
+	BX.onCustomEvent(BX.External, Manager.getLoadEventManagerEvent(), [
+		namespace + '.Event',
+		'/bitrix/js/update_actual/help/notification/event.js'
+	]);
+})();

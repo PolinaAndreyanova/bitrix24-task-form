@@ -1,0 +1,163 @@
+{
+    "0": {
+        "type": "withoutTitle",
+        "title": "",
+        "value": "JSON task",
+        "marking": "task",
+        "option": {}
+    },
+    "1": {
+        "type": "checkbox",
+        "title": "Приоритет",
+        "value": "Это важная задача",
+        "marking": "checkbox",
+        "option": {
+            "checked": "checked"
+        }   
+    },
+    "2": {
+        "type": "withoutTitle",
+        "title": "",
+        "value": "JSON task text",
+        "marking": "taskText",
+        "option": {}
+    },
+    "3": {
+        "type": "element",
+        "title": "Ответственный",
+        "value": {
+            "0": "polina8277@mail.ru"
+        },
+        "marking": "element",
+        "option": {
+            "button": {
+                "name": "+ Добавить еще"
+            }
+        }
+    },
+    "4": {
+        "type": "deadline",
+        "title": "Крайний срок",
+        "value": "08.02.2024 19:00:00",
+        "marking": "deadline",
+        "option": {
+            "extraButton": {
+                "0": {
+                    "name": "Планирование сроков"
+                },
+                "1": {
+                    "name": "Еще"
+                }
+            }
+        }
+    },
+    "5": {
+        "type": "checkbox",
+        "title": "Результат задачи",
+        "value": "Не завершать задачу без результата",
+        "marking": "checkbox",
+        "option": {
+            "checked": "checked"
+        }
+    },
+    "6": {
+        "type": "element",
+        "title": "Проект",
+        "value": {
+            "0": "main"
+        },
+        "marking": "element",
+        "option": {
+            "button": {
+                "name": "Сменить"
+            },
+            "extraButton": {
+                "name": "Создать проект"
+            }
+        }
+    },
+    "7": {
+        "type": "checkbox",
+        "title": "Учет времени",
+        "value": "Время для выполнения задачи",
+        "marking": "checkbox",
+        "option": {
+            "checked": "checked"
+        }
+    },
+    "8": {
+        "type": "reminder",
+        "title": "Напомнить о задаче",
+        "value": {
+            "0": "28.02.2024 09:00:00 ответственному", 
+            "1": "28.02.2024 09:00:00 ответственному"
+        },
+        "marking": "reminder",
+        "option": {}
+    },
+    "9": {
+        "type": "checkbox",
+        "title": "Повторять задачу",
+        "value": "Сделать задачу регулярной",
+        "marking": "checkbox",
+        "option": {
+            "checked": "checked"
+        }
+    },
+    "10": {
+        "type": "element",
+        "title": "CRM",
+        "value": {
+            "0": "user2"
+        },
+        "marking": "element",
+        "option": {
+            "button": {
+                "name": "+ выбрать"
+            }
+        }
+    },
+    "11": {
+        "type": "element",
+        "title": "Сделать подзадачей",
+        "value": {
+            "0": "task1 [6]"
+        },
+        "marking": "element",
+        "option": {
+            "button": {
+                "name": "Сменить"
+            }
+        }
+    },
+    "12": {
+        "type": "element",
+        "title": "Теги",
+        "value": {
+            "0": "1", 
+            "1": "2", 
+            "2": "3",
+            "3": "4"
+        },
+        "marking": "element",
+        "option": {
+            "button": {
+                "name": "+ Добавить еще"
+            }
+        }
+    },
+    "13": {
+        "type": "element",
+        "title": "Связанные задачи",
+        "value": {
+            "0": "Скачать приложение Битрикс24 [2]", 
+            "1": "task2 [4]"
+        },
+        "marking": "element",
+        "option": {
+            "button": {
+                "name": "+ Добавить еще"
+            }
+        }
+    }
+}

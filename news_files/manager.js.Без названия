@@ -1,0 +1,2339 @@
+;(function() {
+	BX.namespace("BX.Intranet.Helper.Notification");
+	if (!BX.Intranet.Helper.Notification.Kernel)
+	{
+		return;
+	}
+
+	BX.namespace('BX.External.Notification');
+
+	BX.External.Notification.Manager = BX.External.NotificationManager = {
+		initErrors: [],
+		errors: [],
+		notificationList: {},
+		tutorialsList: {},
+		isSavingNotifications: false,
+		isSavingTutorials: false,
+		queueToSave: [],
+		hasChangesAfterSave: false,
+		getNotificationUrl: '',
+		checkNotificationsUrl: '',
+		userOptionsCategory: 'external',
+		userOptionsName: 'notification',
+		scriptPath: '/bitrix/js/update_actual/help/notification/',
+		loadedScripts: {},
+		debug: false,
+		isHelperSliderOpen: false,
+		isSomeSliderOpen: false,
+		notificationsActualizeCount: 0,
+		notificationsActualized: false,
+
+		getLoadKernelEvent: function() {
+			return 'kernelIsLoad';
+		},
+
+		getLoadEventManagerEvent: function() {
+			return 'eventManagerIsLoad';
+		},
+
+		resetQueueToSave: function() {
+			this.queueToSave = [];
+		},
+
+		init: function() {
+			this.loader = BX.Intranet.Helper.Notification.Kernel.getLoader();
+			if (this.loaderExists)
+			{
+				this.loader.setDelay(15);
+				if (!this.notifyData.languageId)
+				{
+					this.notifyData.languageId = BX.message('LANGUAGE_ID');
+				}
+			}
+			this.bindEditorToolPanelCloseEvent();
+			this.bindHelperSlider();
+			this.bindMessengerPopup();
+			this.bindHelpdeskActions();
+			BX.addCustomEvent(
+				BX.External,
+				this.getLoadKernelEvent(),
+				BX.delegate(
+					this.loadScriptHandler,
+					this
+				)
+			);
+			this.loadScriptShort('entity.js');
+			this.loadScriptShort('event.js');
+			this.initNotificationsList();
+			if (this.needActualizeNotifications())
+			{
+				this.actualizeNotifications();
+			}
+			else
+			{
+				this.checkShowNotifications();
+			}
+			this.initTutorData();
+		},
+
+		loadScriptShort: function(src, loadEntity) {
+			if (this.helpdeskDomain)
+			{
+				this.loadScript(this.helpdeskDomain + this.scriptPath + src, loadEntity);
+			}
+		},
+		loadScript: function(src, loadEntity) {
+			if (BX.type.isArray(src))
+			{
+				for (let i = 0; i < src.length; i++)
+				{
+					this.loadScript(src[i], loadEntity);
+				}
+			}
+			else
+			{
+				let date = new Date();
+				let scriptCacheTime = 30;
+				src = BX.util.add_url_param(
+					src,
+					{
+						t: Math.ceil(date.getTime() / (1000 * scriptCacheTime))
+					}
+				);
+				let saveSrc = this.normalizeScriptSrc(src);
+				if (BX.type.isNotEmptyString(saveSrc))
+				{
+					if (!this.loadedScripts.hasOwnProperty(saveSrc))
+					{
+						let element = document.createElement("script");
+						element.type = "text/javascript";
+						element.src = src;
+
+						let head = document.head || document.getElementsByTagName("head")[0];
+						head.insertBefore(element, head.lastChild);
+						if (!this.loadedScripts[saveSrc])
+						{
+							this.loadedScripts[saveSrc] = {
+								node: element,
+								entities: []
+							};
+						}
+						if (loadEntity)
+						{
+							this.loadedScripts[saveSrc].entities.push(loadEntity);
+						}
+					}
+					else if (this.loadedScripts[saveSrc].class)
+					{
+						this.loadScriptHandler(
+							this.loadedScripts[saveSrc].class,
+							src,
+							loadEntity
+						);
+					}
+					else if (loadEntity)
+					{
+						this.loadedScripts[saveSrc].entities.push(loadEntity);
+					}
+				}
+			}
+		},
+
+		normalizeScriptSrc: function(src) {
+			let saveSrc = '';
+			if (BX.type.isNotEmptyString(src))
+			{
+				let pathRegExp = /^(http[s]?:\/\/[a-z_0-9.]+)?\/(.+)\.js\??.*/i;
+				let result = src.match(pathRegExp);
+				if (result)
+				{
+					saveSrc = result[2];
+				}
+			}
+
+			return saveSrc;
+		},
+
+		portalTutorManagerInitHandler: function() {
+			this.initTutorData();
+		},
+
+		initTutorData: function() {
+			if (this.hasTutorialFeature())
+			{
+				let tutorManager = BX.UI.Tutor.Manager.getInstance();
+				if (tutorManager instanceof BX.UI.Tutor.Manager)
+				{
+					const currentTutorialData = tutorManager.getCurrentTutorialData();
+					const currentEventService = tutorManager.getCurrentEventService();
+					this.checkEventServiceData({
+						eventService: currentEventService
+					});
+					this.lastChecktutorialsTime = tutorManager.getCurrentLastCheckTime();
+					if (this.lastChecktutorialsTime === 0)
+					{
+						if (!BX.type.isNotEmptyObject(currentTutorialData))
+						{
+							this.tutorialsList = {};
+						}
+						if (!BX.type.isNotEmptyObject(currentEventService))
+						{
+							this.checkEventServiceData({
+								eventService: {}
+							});
+						}
+						this.saveTutorials();
+						this.saveLastCheckTutorialsTime(this.getNow() + this.getIncorrectTutorialsDelay());
+					}
+					else
+					{
+						this.tutorialsList = this.prepareNotifications(currentTutorialData);
+						if (this.needActualizeTutorials())
+						{
+							this.actualizeTutorials();
+						}
+						else
+						{
+							this.checkShowTutorials();
+						}
+					}
+				}
+			}
+		},
+
+		resetActionData: function() {
+			this.updateCurrentAction({
+				isLoading: false,
+				onlyLoading: false,
+				showGuide: false,
+				showFromWelcomePopup: false,
+				showFromStartPopup: false,
+				fromCollapsed: false
+			});
+		},
+
+		needActualizeNotifications: function() {
+			var isNeedCheck = false;
+			var dateTimeNow = new Date();
+			dateTimeNow.setTime(this.timeNow * 1000);
+			var dateCheck = new Date();
+			dateCheck.setTime(this.lastCheckNotificationsTime * 1000);
+			if ((dateTimeNow.getTime() - dateCheck.getTime()) / 1000 > this.getCheckNotificationsDelay())
+			{
+				isNeedCheck = true;
+			}
+
+			return isNeedCheck;
+		},
+
+		needActualizeTutorials: function() {
+			var isNeedCheck = false;
+			var dateTimeNow = new Date();
+			dateTimeNow.setTime(this.timeNow * 1000);
+			var dateCheck = new Date();
+			dateCheck.setTime(this.lastChecktutorialsTime * 1000);
+			if ((dateTimeNow.getTime() - dateCheck.getTime()) / 1000 > this.getCheckTutorialsDelay())
+			{
+				isNeedCheck = true;
+			}
+
+			return isNeedCheck;
+		},
+
+		actualizeNotifications: function() {
+			if (!this.hasInitErrors())
+			{
+				this.checkNotifications();
+			}
+		},
+
+		actualizeTutorials: function() {
+			if (!this.hasInitErrors())
+			{
+				this.checkTutorials();
+			}
+		},
+
+		checkShowTutorials: function() {
+			this.checkShowNotifications(this.tutorialsList, 'tutorials');
+		},
+
+		checkShowNotifications: function(items, type) {
+			type = type || 'notifications';
+			this.log('check show', type);
+			let isTutorials = type === 'tutorials';
+			if (!items)
+			{
+				items = this.notificationList;
+			}
+			if (!this.hasInitErrors())
+			{
+				//select notification to show by condition
+				const satisfiedNotificationsId = [];
+				this.log('items', items);
+				for (let notificationId in items)
+				{
+					if (items.hasOwnProperty(notificationId))
+					{
+						if (this.isConditionsSatisfied(items[notificationId], type))
+						{
+							this.log('isConditionsSatisfied', notificationId);
+							satisfiedNotificationsId.push(notificationId);
+						}
+						else
+						{
+							this.log('not isConditionsSatisfied', notificationId);
+						}
+					}
+				}
+				let getNotificationId = -1;
+				if (satisfiedNotificationsId.length > 1)
+				{
+					getNotificationId = this.getOneNotificationIdFromSatisfied(satisfiedNotificationsId);
+					this.log('getOneNotificationIdFromSatisfied', getNotificationId);
+				}
+				else if (satisfiedNotificationsId.length === 1)
+				{
+					getNotificationId = satisfiedNotificationsId[0];
+					this.log('first', getNotificationId);
+				}
+
+				if (getNotificationId !== -1 &&
+					items.hasOwnProperty(getNotificationId.toString())
+				)
+				{
+					let notification = items[getNotificationId];
+					let type = notification.TYPE || '';
+					let isBase = type === 'BASE';
+					let isTour = type === 'TOUR';
+					let isShutter = type === 'SHUTTER';
+					let isTutorial = type === 'TUTORIAL';
+					this.log('show', type, notification);
+					if (isTutorial)
+					{
+						this.loadScriptShort('tutorial.js', {
+							manager: this,
+							notification: notification
+						});
+						this.loadScriptShort('extended/guide.js', {
+							manager: this,
+							notification: notification
+						});
+						this.saveTutorials();
+					}
+					else if (
+						(
+							this.hasEmptyPage() &&
+							(
+								(isBase && this.isAllowedToShowBaseNotification())
+								|| isTour
+								|| (isShutter && this.isAllowedToShowShutterNotification())
+							)
+						)
+						||
+						(notification.IS_READ_REQUIRED === true
+							&& !notification.HAS_ALREADY_BEEN_READ
+							&& this.hasEmptyPage())
+					)
+					{
+						if (this.notificationsActualized)
+						{
+							this.getNotification(notification, type);
+						}
+						else if (this.notificationsActualizeCount <= 2)
+						{
+							this.actualizeNotifications();
+						}
+					}
+					else if (notification.IS_READ_REQUIRED === true &&
+						notification.HAS_ALREADY_BEEN_READ &&
+						notification.AGREEMENT_DATA &&
+						notification.AGREEMENT_URL)
+					{
+						BX.ajax({
+							method: "POST",
+							dataType: 'json',
+							url: this.getHelpdeskDomain() + notification.AGREEMENT_URL,
+							data: notification.AGREEMENT_DATA,
+							onsuccess: BX.delegate(function() {
+								this.removeNotification(
+									notification.ID,
+									this.notificationList
+								)
+							}, this),
+							onfailure: BX.delegate(function() {
+
+							}, this)
+						});
+					}
+				}
+			}
+		},
+
+		setShowNotification: function(notification) {
+			this.log('setShowNotification', notification);
+			if (notification && !notification.isTest)
+			{
+				this.setLastShowDate(notification.TYPE, this.getNow());
+				if (isNaN(notification.SHOW_COUNTER))
+				{
+					notification.SHOW_COUNTER = 1;
+				}
+				else
+				{
+					notification.SHOW_COUNTER++;
+				}
+				if (notification.TYPE === 'BASE' || notification.TYPE === 'TOUR')
+				{
+					this.saveNotifications();
+				}
+			}
+		},
+
+		getNow: function() {
+			return Math.ceil(Date.now() / 1000);
+		},
+
+		getOneNotificationIdFromSatisfied: function(satisfiedIds) {
+			var selectedNotificationId = 0;
+			satisfiedIds = satisfiedIds || [];
+
+			if (BX.type.isArray(satisfiedIds) && satisfiedIds.length > 0)
+			{
+				var minSort = -1;
+				var notificationBySort = {
+					'withoutSort': []
+				};
+				let minRequiredSort = -1;
+				const notificationRequiredBySort = {
+					'withoutSort': []
+				};
+				for (var i = 0; i < satisfiedIds.length; i++)
+				{
+					var notification = this.notificationList[satisfiedIds[i]];
+					var sort = parseInt(notification.SORT);
+					if (notification.hasOwnProperty('SORT') && !isNaN(sort))
+					{
+						const sortString = sort.toString();
+						if(notification.IS_READ_REQUIRED)
+						{
+							if (minRequiredSort > 0)
+							{
+								minRequiredSort = Math.min(minRequiredSort, notification.SORT);
+							}
+							else
+							{
+								minRequiredSort = sort;
+							}
+
+							if (!notificationRequiredBySort.hasOwnProperty(sortString))
+							{
+								notificationRequiredBySort[sortString] = [];
+							}
+							notificationRequiredBySort[sortString].push(satisfiedIds[i]);
+						}
+						else
+						{
+							if (minSort > 0)
+							{
+								minSort = Math.min(minSort, notification.SORT);
+							}
+							else
+							{
+								minSort = sort;
+							}
+
+							if (!notificationBySort.hasOwnProperty(sortString))
+							{
+								notificationBySort[sortString] = [];
+							}
+							notificationBySort[sortString].push(satisfiedIds[i]);
+						}
+					}
+					else
+					{
+						if(notification.IS_READ_REQUIRED)
+						{
+							notificationRequiredBySort.withoutSort.push(satisfiedIds[i]);
+						}
+						else
+						{
+							notificationBySort.withoutSort.push(satisfiedIds[i]);
+						}
+					}
+				}
+
+				if (minRequiredSort !== -1)
+				{
+					if (notificationRequiredBySort.hasOwnProperty(minRequiredSort.toString()))
+					{
+						selectedNotificationId = this.getRandomIdFromSatisfied(notificationRequiredBySort[minRequiredSort.toString()]);
+					}
+				}
+				else if(notificationRequiredBySort.withoutSort.length > 0)
+				{
+					selectedNotificationId = this.getRandomIdFromSatisfied(notificationRequiredBySort.withoutSort);
+				}
+				else if (minSort !== -1)
+				{
+					if (notificationBySort.hasOwnProperty(minSort.toString()))
+					{
+						selectedNotificationId = this.getRandomIdFromSatisfied(notificationBySort[minSort.toString()]);
+					}
+				}
+				else
+				{
+					selectedNotificationId = this.getRandomIdFromSatisfied(notificationBySort.withoutSort);
+				}
+			}
+
+			return selectedNotificationId;
+		},
+
+		getRandomIdFromSatisfied: function(satisfiedId) {
+			return satisfiedId[Math.floor(Math.random() * satisfiedId.length)];
+		},
+
+		prepareListToSave: function() {
+			var result = {};
+
+			if (!this.hasInitErrors())
+			{
+				result = this.notificationList;
+			}
+
+			return JSON.stringify(result);
+		},
+
+		prepareTutorialsToSave: function() {
+			var result = {};
+
+			if (!this.hasInitErrors() && BX.type.isNotEmptyObject(this.tutorialsList))
+			{
+				result = this.tutorialsList;
+			}
+
+			return JSON.stringify(result);
+		},
+
+		prepareEventServiceToSave: function() {
+			var result = {};
+			if (!this.hasInitErrors() && BX.type.isNotEmptyObject(this.eventService))
+			{
+				result = this.eventService;
+			}
+
+			return JSON.stringify(result);
+		},
+
+		initNotificationsList: function() {
+			if (!this.hasInitErrors())
+			{
+				var currentNotifications = {};
+				try
+				{
+					currentNotifications = JSON.parse(this.currentNotificationsString);
+				} catch (exception)
+				{
+					currentNotifications = {};
+					this.addError({
+						code: 'JSON_PARSE_ERROR_NOTIFICATIONS_STRING',
+						data: { value: this.currentNotificationsString }
+					});
+				}
+				this.notificationList = this.prepareNotifications(currentNotifications);
+			}
+		},
+
+		getTutorialCurrentActionStorageName: function() {
+			return 'bx_ui_tutor_scenario_current_action';
+		},
+
+		getTutorialCurrentScenarioStorageName: function() {
+			return 'bx_ui_tutor_scenario_current_scenario';
+		},
+
+		saveCurrentAction: function(action) {
+			localStorage.setItem(this.getTutorialCurrentActionStorageName(), JSON.stringify(action));
+		},
+
+		getCurrentAction: function() {
+			if (this.hasTutorialFeature())
+			{
+				let actionJson = localStorage.getItem(this.getTutorialCurrentActionStorageName());
+				let action = null;
+				if (BX.type.isNotEmptyString(actionJson))
+				{
+					action = JSON.parse(actionJson);
+				}
+
+				return action;
+			}
+
+			return null;
+		},
+
+		hasTutorialFeature: function() {
+			return false;
+		},
+
+		hasTutorials: function() {
+			return BX.type.isNotEmptyObject(this.tutorialsList) && this.hasTutorialFeature();
+		},
+
+		prepareNotifications: function(notifications) {
+			var checkedNotifications = {};
+			notifications = notifications || {};
+			for (var notificationId in notifications)
+			{
+				if (notifications.hasOwnProperty(notificationId))
+				{
+					var notification = notifications[notificationId];
+
+					if (this.isNotificationCorrect(notification))
+					{
+						checkedNotifications[notificationId] = notification;
+					}
+				}
+			}
+
+			return checkedNotifications;
+		},
+
+		prepareTutorials: function(tutorials) {
+			var checkedTutorials = {};
+			tutorials = tutorials || {};
+			for (var tutorialId in tutorials)
+			{
+				if (tutorials.hasOwnProperty(tutorialId))
+				{
+					var tutorial = tutorials[tutorialId];
+					if (this.isTutorialCorrect(tutorial))
+					{
+						checkedTutorials[tutorialId] = tutorial;
+					}
+				}
+			}
+
+			return checkedTutorials;
+		},
+
+		setLastResources: function(resourses) {
+			this.lastResources = resourses;
+		},
+
+		getLastResources: function() {
+			return this.lastResources;
+		},
+
+		getHelpdeskDomain: function() {
+			return this.helpdeskDomain;
+		},
+
+		getNotifyData: function() {
+			return this.notifyData;
+		},
+
+		isNotificationCorrect: function(notification) {
+			var isCorrect = true;
+			notification = notification || {};
+
+			return isCorrect;
+		},
+
+		isTutorialCorrect: function(tutorial) {
+			var isCorrect = true;
+			tutorial = tutorial || {};
+
+			return isCorrect;
+		},
+
+		saveNotifications: function(isSaveTime) {
+			isSaveTime = isSaveTime === true;
+			if (!this.hasInitErrors())
+			{
+				let params = { isSaveTime: isSaveTime };
+				if (!this.isSavingNotifications)
+				{
+					this.sendAjaxToSave(params);
+				}
+				else
+				{
+					this.queueToSave.push(params);
+				}
+			}
+		},
+
+		saveTutorials: function() {
+			if (!this.hasInitErrors())
+			{
+				if (!this.isSavingTutorials)
+				{
+					this.sendTutorialsToSave();
+				}
+				else
+				{
+					this.hasChangesAfterSave = true;
+				}
+			}
+		},
+
+		resetNotificationsOnPortal: function() {
+			this.notificationList = {};
+			this.sendAjaxToSave();
+		},
+
+		sendAjaxToSave: function(params) {
+			this.isSavingNotifications = true;
+			params = params || {};
+			var saveData = {
+				sessid: BX.bitrix_sessid(),
+				action: "saveNotifications",
+				notifications: this.prepareListToSave()
+			};
+			if (params.isSaveTime)
+			{
+				saveData.lastCheckNotificationsTime = 'Y';
+			}
+			if (BX.type.isNotEmptyString(this.ajaxUrl))
+			{
+				BX.ajax({
+					method: "POST",
+					dataType: 'json',
+					url: this.ajaxUrl,
+					data: saveData,
+					onsuccess: BX.proxy(this.saveByAjaxSuccessHandler, this),
+					onfailure: BX.proxy(this.saveByAjaxFailureHandler, this)
+				});
+			}
+		},
+
+		setActiveNotification: function(notification) {
+			if (BX.External.Notification.Entity && notification instanceof BX.External.Notification.Entity)
+			{
+				this.activeNotification = notification;
+			}
+		},
+
+		removeActiveNotification: function() {
+			delete this.activeNotification;
+		},
+
+		getActiveNotification: function() {
+			return this.activeNotification;
+		},
+
+		hasActiveNotification: function() {
+			return !!this.activeNotification;
+		},
+
+		sendTutorialsToSave: function() {
+			const userOptions = BX.userOptions;
+			if (userOptions)
+			{
+				this.isSavingTutorials = true;
+				this.saveToOptions('tutorials', this.prepareTutorialsToSave());
+				this.saveToOptions('eventService', this.prepareEventServiceToSave());
+				userOptions.send(BX.proxy(this.saveTutorialsByAjaxSuccessHandler, this));
+			}
+		},
+
+		saveByAjaxFailureHandler: function() {
+			this.isSavingNotifications = false;
+		},
+
+		saveByAjaxSuccessHandler: function(result) {
+			this.isSavingNotifications = false;
+			if (this.queueToSave.length > 0)
+			{
+				let params = this.queueToSave.shift();
+				this.sendAjaxToSave(params);
+			}
+		},
+
+		saveTutorialsByAjaxSuccessHandler: function() {
+			this.isSavingTutorials = false;
+			if (this.hasChangesAfterSave)
+			{
+				this.hasChangesAfterSave = false;
+				this.saveTutorials();
+			}
+		},
+
+		onFailureCheckNotificationsHandler: function(result) {
+			this.notificationsActualized = true;
+		},
+
+		onFailureCheckTutorialsHandler: function(result) {
+
+		},
+
+		onSuccessCheckNotificationsHandler: function(result) {
+			if (result && result.hasOwnProperty('notifications'))
+			{
+				this.notificationsActualized = true;
+				this.updateNotificationList(this.prepareNotifications(result.notifications));
+				this.checkShowNotifications();
+			}
+		},
+
+		onSuccessCheckTutorialsHandler: function(result) {
+			if (result && result.hasOwnProperty('tutorials'))
+			{
+				this.updateTutorialList(this.prepareTutorials(result.tutorials));
+				this.checkEventServiceData(result);
+				this.checkShowTutorials();
+			}
+		},
+
+		saveLastCheckTutorialsTime: function(time) {
+			const userOptions = BX.userOptions;
+			if (userOptions)
+			{
+				time = time || this.getNow();
+				this.saveToOptions('lastCheckTime', time);
+				userOptions.send(function() {
+				});
+			}
+		},
+
+		saveToOptions: function(key, value) {
+			const userOptions = BX.userOptions;
+			if (userOptions)
+			{
+				userOptions.save(this.userOptionsCategory, this.userOptionsName, key, value);
+			}
+		},
+
+		checkEventServiceData: function(result) {
+			if (BX.type.isNotEmptyObject(result))
+			{
+				let service = result.eventService;
+				if (BX.type.isNotEmptyObject(service))
+				{
+					let isNeedUpdate = false;
+					if (!this.eventService)
+					{
+						this.eventService = service;
+					}
+					else if (JSON.stringify(this.eventService) !== JSON.stringify(service))
+					{
+						this.eventService = service;
+					}
+				}
+			}
+		},
+
+		onFailureGetNotificationHandler: function(result) {
+
+		},
+
+		updateNotificationList: function(newNotificationList) {
+			let resultNotificationList = {};
+			for (let newNotificationId in newNotificationList)
+			{
+				if (newNotificationList.hasOwnProperty(newNotificationId))
+				{
+					const newNotification = newNotificationList[newNotificationId];
+					const notificationToSave = newNotification;
+					if (this.notificationList.hasOwnProperty(newNotificationId))
+					{
+						const oldNotification = this.notificationList[newNotificationId];
+						if(oldNotification.hasOwnProperty('SHOW_COUNTER'))
+						{
+							newNotification.SHOW_COUNTER = oldNotification.SHOW_COUNTER;
+						}
+						if(oldNotification.hasOwnProperty('HAS_ALREADY_BEEN_READ'))
+						{
+							newNotification.HAS_ALREADY_BEEN_READ = oldNotification.HAS_ALREADY_BEEN_READ;
+						}
+						if(oldNotification.hasOwnProperty('AGREEMENT_DATA'))
+						{
+							newNotification.AGREEMENT_DATA = oldNotification.AGREEMENT_DATA;
+						}
+						if(oldNotification.hasOwnProperty('AGREEMENT_URL'))
+						{
+							newNotification.AGREEMENT_URL = oldNotification.AGREEMENT_URL;
+						}
+					}
+
+					resultNotificationList[newNotificationId] = notificationToSave;
+				}
+			}
+
+			this.notificationList = resultNotificationList;
+			this.saveNotifications(true);
+		},
+
+		isNotifyPanelShow: function()
+		{
+			let isShow = false;
+			if(BX.Bitrix24 && BX.Bitrix24.NotifyPanel)
+			{
+				const notifyNode = document.querySelector('.bx24-tariff-notify.bx24-tariff-notify-show.bx24-tariff-notify-panel');
+				isShow = BX.type.isElementNode(notifyNode);
+			}
+
+			return isShow;
+		},
+
+		hasEmptyPage: function(isSkipCheckPopup, isSkipCheckSlider) {
+			isSkipCheckPopup = isSkipCheckPopup === true;
+			isSkipCheckSlider = isSkipCheckSlider === true;
+			const isPopupShow = !!(BX.PopupWindowManager && BX.PopupWindowManager.isAnyPopupShown());
+			const isNotifyPanelShow = this.isNotifyPanelShow();
+			const isSliderShow = !!(BX.SidePanel && BX.SidePanel.Instance && BX.SidePanel.Instance.getOpenSlidersCount() !== 0);
+			const isHelperShow = !!(this.helper && parseInt(this.helper.notifyId) !== 0);
+			const isMessengerShow = !!(BX.MessengerWindow && BX.type.isFunction(BX.MessengerWindow.isPopupShow) && BX.MessengerWindow.isPopupShow());
+			const result = (!isPopupShow || isSkipCheckPopup) &&
+				(!isSliderShow || isSkipCheckSlider) &&
+				!isHelperShow &&
+				!isNotifyPanelShow &&
+				!isMessengerShow;
+			this.log('isSkipCheckPopup', isSkipCheckPopup);
+			this.log('isSkipCheckSlider', isSkipCheckSlider);
+			this.log('popup exists', isPopupShow);
+			this.log('slider exists', isSliderShow);
+			this.log('helper exists', isHelperShow);
+			this.log('notify panel exists', isNotifyPanelShow);
+			this.log('messenger exists', isMessengerShow);
+			this.log('has empty page', result);
+
+			return result
+		},
+
+		getLastShowDate: function(type) {
+			return localStorage.getItem(this.getNotificationLastShowParamName(type));
+		},
+
+		setLastShowDate: function(type, date) {
+			localStorage.setItem(this.getNotificationLastShowParamName(type), date);
+		},
+
+		getNotificationLastShowParamName: function(type) {
+			return 'external_notification_last_show__' + type.toLocaleLowerCase();
+		},
+
+		getBreakDuration: function(type, afterType) {
+			let breakDurations = {
+				BASE_AFTER_BASE: 86400 * 3,
+				BASE_AFTER_TOUR: 86400,
+				SHUTTER_AFTER_SHUTTER: 43200,
+				SHUTTER_AFTER_BASE: 3600,
+				SHUTTER_AFTER_TOUR: 3600,
+			};
+			let resultType = type + '_AFTER_' + afterType;
+			if (breakDurations.hasOwnProperty(resultType))
+			{
+				return breakDurations[resultType];
+			}
+			else
+			{
+				return 3600;
+			}
+		},
+
+		isShowBreakComplete: function(type, afterType) {
+			type = type || '';
+			afterType = afterType || type;
+			let lastNotificationDate = parseInt(this.getLastShowDate(afterType));
+			if (isNaN(lastNotificationDate))
+			{
+				lastNotificationDate = 0;
+			}
+			this.log(this.getNow() - lastNotificationDate, this.getBreakDuration(type, afterType));
+
+			return (this.getNow() - lastNotificationDate) > this.getBreakDuration(type, afterType);
+		},
+
+		isAllowedToShowBaseNotification: function() {
+			return this.hasEmptyPage() && this.isShowBreakComplete('BASE') && this.isShowBreakComplete('BASE', 'TOUR');
+		},
+
+		isAllowedToShowShutterNotification: function() {
+			return this.hasEmptyPage() &&
+				this.isShowBreakComplete('SHUTTER') &&
+				this.isShowBreakComplete('SHUTTER', 'BASE') &&
+				this.isShowBreakComplete('SHUTTER', 'TOUR');
+		},
+
+		updateTutorial: function(notificationId, parameters) {
+			if (this.hasTutorialFeature())
+			{
+				if (this.tutorialsList && this.tutorialsList.hasOwnProperty(notificationId))
+				{
+					let hasChanges = false;
+					let notification = this.tutorialsList[notificationId];
+					for (let key in parameters)
+					{
+						if (parameters.hasOwnProperty(key))
+						{
+							let value = parameters[key];
+							if (!notification.hasOwnProperty(key) || value !== notification[key])
+							{
+								notification[key] = value;
+								hasChanges = true;
+							}
+						}
+					}
+					if (hasChanges)
+					{
+						this.saveTutorials();
+					}
+				}
+			}
+		},
+		updateTutorialList: function(newTutorialList) {
+			let hasChanges = false;
+			let resultTutorialList = null;
+			for (let newTutorialId in newTutorialList)
+			{
+				if (newTutorialList.hasOwnProperty(newTutorialId))
+				{
+					let newTutorial = newTutorialList[newTutorialId];
+					let needAddNewTutorial = false;
+					let tutorialToSave = newTutorial;
+					if (this.tutorialsList.hasOwnProperty(newTutorialId))
+					{
+						let oldTutorial = this.tutorialsList[newTutorialId];
+						if (!isNaN(oldTutorial.SHOW_COUNTER) && oldTutorial.SHOW_COUNTER > 0)
+						{
+							tutorialToSave = oldTutorial;
+						}
+						else
+						{
+							hasChanges = true;
+						}
+					}
+					else
+					{
+						hasChanges = true;
+					}
+					if (resultTutorialList === null)
+					{
+						resultTutorialList = {};
+					}
+					resultTutorialList[newTutorialId] = tutorialToSave;
+				}
+			}
+
+			if (resultTutorialList === null)
+			{
+				hasChanges = true;
+				resultTutorialList = {};
+			}
+
+			if (hasChanges)
+			{
+				this.tutorialsList = resultTutorialList;
+				this.saveTutorials();
+			}
+		},
+
+		onSuccessGetNotificationHandler: function(result) {
+			let manager = this.manager;
+			if (result)
+			{
+				this.resources = result.resources;
+				if (this.notification &&
+					!this.notification.TYPE &&
+					this.resources &&
+					BX.type.isNotEmptyString(this.resources.notificationType)
+				)
+				{
+					this.notification.TYPE = this.resources.notificationType;
+					manager.log('notification without type', this.notification.TYPE);
+				}
+
+				if (result.hasOwnProperty('assets'))
+				{
+					if (result.assets.hasOwnProperty('css') && BX.type.isArray(result.assets.css))
+					{
+						manager.includeCss(result.assets.css);
+					}
+					if (result.assets.hasOwnProperty('js') && BX.type.isArray(result.assets.js))
+					{
+						manager.loadScript(result.assets.js, this);
+					}
+					if (result.assets.hasOwnProperty('css_load_checker') && BX.type.isPlainObject(result.assets.css_load_checker))
+					{
+						this.resources.css_load_checker = result.assets.css_load_checker;
+					}
+				}
+			}
+			manager.checkEventServiceData(result);
+		},
+
+		loadScriptHandler: function(kernelFunctionName, src, loadEntity) {
+			let saveSrc = this.normalizeScriptSrc(src);
+			if (BX.type.isNotEmptyString(saveSrc))
+			{
+				let kernelClass = eval(kernelFunctionName);
+				if (!this.loadedScripts[saveSrc].class)
+				{
+					this.loadedScripts[saveSrc].class = kernelClass;
+					let entities = this.loadedScripts[saveSrc].entities;
+					for (let i = 0; i < entities.length; i++)
+					{
+						kernelClass.create(entities[i]);
+					}
+					delete this.loadedScripts[saveSrc].entities;
+				}
+				if (loadEntity)
+				{
+					kernelClass.create(loadEntity);
+				}
+			}
+		},
+
+		onSuccessCheckNotificationHandler: function(result) {
+			if (result && result.hasOwnProperty('data'))
+			{
+
+			}
+		},
+
+		onFailureCheckNotificationHandler: function(result) {
+			if (result && result.hasOwnProperty('data'))
+			{
+
+			}
+		},
+
+		includeCss: function(cssSrc, callback) {
+			cssSrc = cssSrc || [];
+			BX.load(cssSrc, callback)
+		},
+
+		checkNotifications: function() {
+			if (!this.hasInitErrors())
+			{
+				var checkData = {};
+				this.addNotifyDataParams(checkData);
+				this.addRuntimeParams(checkData);
+
+				checkData.action = 'checkNotifications';
+
+				if (BX.type.isNotEmptyString(this.checkNotificationsUrl))
+				{
+					this.notificationsActualizeCount++;
+					this.log('notifications check, try number', this.notificationsActualizeCount);
+					BX.ajax({
+						method: "POST",
+						dataType: 'json',
+						url: this.checkNotificationsUrl,
+						data: checkData,
+						timeout: 10,
+						onsuccess: BX.proxy(this.onSuccessCheckNotificationsHandler, this),
+						onfailure: BX.proxy(this.onFailureCheckNotificationsHandler, this)
+					});
+				}
+			}
+		},
+
+		getUserInfo: function(loadIfNotExists) {
+			loadIfNotExists = loadIfNotExists === true;
+			if(this.enoughtCurrentUserDataToSend)
+			{
+				return this.currentUser;
+			}
+			else
+			{
+				if(!this.isCurrentuserInfoLoad || loadIfNotExists)
+				{
+					this.isCurrentuserInfoLoad = true;
+					this.initUserInfo();
+				}
+
+				return null;
+			}
+		},
+
+		initUserInfo: function() {
+			const userId = BX.message('USER_ID');
+			if (!isNaN(userId) && userId > 0)
+			{
+				BX.rest.callMethod('user.get', { ID: userId }, BX.delegate(this.getUserInfoHandler, this));
+			}
+		},
+
+		getUserInfoHandler: function(result) {
+			result = result || {};
+
+			if (result.status &&
+				result.status === 200 &&
+				result.answer &&
+				result.answer.result &&
+				BX.type.isArray(result.answer.result) &&
+				result.answer.result.length === 1)
+			{
+				const userInfo = result.answer.result[0];
+				let phone = userInfo.PERSONAL_PHONE || '';
+				if(!BX.type.isNotEmptyString(phone) && userInfo.PERSONAL_MOBILE)
+				{
+					phone = userInfo.PERSONAL_MOBILE;
+				}
+				this.currentUser = {
+					id: userInfo.ID,
+					email: userInfo.EMAIL,
+					name: userInfo.NAME,
+					lastName: userInfo.LAST_NAME,
+					phone: phone
+				};
+				if (BX.type.isNotEmptyString(this.currentUser.email))
+				{
+					this.enoughtCurrentUserDataToSend = true;
+				}
+				BX.onCustomEvent(this, this.getUserInitEventCode());
+			}
+		},
+
+		checkTutorials: function() {
+			if (!this.hasInitErrors() && this.hasTutorialFeature())
+			{
+				var checkData = {};
+				this.addNotifyDataParams(checkData);
+				checkData.action = 'checkTutorials';
+				if (BX.type.isNotEmptyString(this.checkTutorialsUrl))
+				{
+					this.saveLastCheckTutorialsTime();
+					BX.ajax({
+						method: "POST",
+						dataType: 'json',
+						url: this.checkTutorialsUrl,
+						data: checkData,
+						timeout: 10,
+						onsuccess: BX.proxy(this.onSuccessCheckTutorialsHandler, this),
+						onfailure: BX.proxy(this.onFailureCheckTutorialsHandler, this)
+					});
+				}
+			}
+		},
+
+		updateCurrentAction: function(changedParameters) {
+			if (this.hasTutorialFeature())
+			{
+				let currentAction = this.getCurrentAction();
+				if (!BX.type.isNotEmptyObject(currentAction))
+				{
+					currentAction = {};
+				}
+				for (let changedParametersKey in changedParameters)
+				{
+					if (changedParameters.hasOwnProperty(changedParametersKey))
+					{
+						currentAction[changedParametersKey] = changedParameters[changedParametersKey];
+					}
+				}
+				this.saveCurrentAction(currentAction);
+			}
+		},
+
+		getTutorial: function(notification, parameters) {
+			this.getNotification(notification, 'tutorial', parameters);
+		},
+
+		getNotification: function(notification, type, parameters) {
+			if (!this.hasInitErrors())
+			{
+				parameters = parameters || {};
+				type = type || 'notification';
+				var getData = {};
+				this.addNotifyDataParams(getData);
+				this.addRuntimeParams(getData);
+				getData.action = 'getNotification';
+				getData.auth = notification.AUTH;
+				getData.id = notification.ID;
+				if (notification.isTest === true)
+				{
+					getData.isTest = 'Y';
+				}
+				if (parameters.setIsShowWelcomePopup)
+				{
+					getData.setIsShowWelcomePopup = 'Y';
+				}
+
+				if (type === 'notification')
+				{
+					this.blockLoad = true;
+				}
+
+				if (BX.type.isNotEmptyString(this.getNotificationUrl))
+				{
+					BX.ajax({
+						method: "post",
+						dataType: 'json',
+						url: this.getNotificationUrl,
+						data: getData,
+						timeout: 10,
+						onsuccess: BX.proxy(this.onSuccessGetNotificationHandler, {
+							manager: this,
+							notification: notification
+						}),
+						onfailure: BX.proxy(this.onFailureGetNotificationHandler, this)
+					});
+				}
+			}
+		},
+
+		removeNotification: function(notificationId, notificationList) {
+			if (notificationList &&
+				typeof notificationList === 'object' &&
+				notificationList.hasOwnProperty(notificationId))
+			{
+				delete notificationList[notificationId];
+				this.saveNotifications();
+			}
+		},
+
+		clearNotification: function(notification, type, parameters) {
+			if (!this.hasInitErrors())
+			{
+				const data = {};
+				this.addNotifyDataParams(data);
+				this.addRuntimeParams(data);
+				data.action = 'clearNotification';
+				data.auth = notification.AUTH;
+				data.id = notification.ID;
+				const clearUrl = this.clearNotificationUrl;
+				if (BX.type.isNotEmptyString(clearUrl))
+				{
+					BX.ajax({
+						method: "post",
+						dataType: 'json',
+						url: clearUrl,
+						data: data,
+						timeout: 10,
+						onsuccess: BX.delegate(function() {
+
+						}, this),
+						onfailure: function() {
+
+						}
+					});
+				}
+			}
+		},
+
+		checkNotification: function(notificationCode, isTest) {
+			isTest = isTest === true;
+			if (!this.hasInitErrors())
+			{
+				var getData = {};
+				this.addNotifyDataParams(getData);
+				this.addRuntimeParams(getData);
+
+				getData.action = 'checkNotification';
+				getData.code = notificationCode;
+				if (isTest === true)
+				{
+					getData.isTest = 'Y';
+				}
+
+				if (BX.type.isNotEmptyString(this.getNotificationUrl))
+				{
+					BX.ajax({
+						method: "post",
+						dataType: 'json',
+						url: this.checkIsNotificationExistsUrl,
+						data: getData,
+						timeout: 10,
+						onsuccess: BX.proxy(this.onSuccessCheckNotificationHandler, this),
+						onfailure: BX.proxy(this.onFailureCheckNotificationHandler, this)
+					});
+				}
+			}
+		},
+
+		getNotificationById: function(id) {
+			this.getNotification({ ID: id, isTest: true });
+		},
+
+		clearNotificationById: function(id) {
+			this.clearNotification({ ID: id });
+		},
+
+		bindHelperSlider: function() {
+			let helper = this.helper;
+			if (helper && BX.type.isFunction(helper.getSlider))
+			{
+				BX.addCustomEvent("SidePanel.Slider:onOpenComplete", BX.delegate(function(event) {
+					let slider = event.getSlider();
+					if (BX.SidePanel && slider instanceof BX.SidePanel.Slider)
+					{
+						this.isSomeSliderOpen = true;
+						BX.onCustomEvent(this, 'someSliderOpen');
+						this.bindSomeSliderClose(slider);
+						if (slider.getUrl() === this.helperFrameUrl)
+						{
+							this.isHelperSliderOpen = true;
+							BX.onCustomEvent(this, 'helperSliderOpen');
+							this.bindHelperSliderClose(slider);
+						}
+					}
+				}, this));
+			}
+		},
+
+		bindSomeSliderClose: function(slider) {
+			if (slider)
+			{
+				this.closeSomeSliderHandler = BX.delegate(function(event) {
+					this.isSomeSliderOpen = false;
+					BX.onCustomEvent(this, 'someSliderClose');
+					BX.removeCustomEvent(slider, 'SidePanel.Slider:onCloseComplete', this.closeSomeSliderHandler);
+				}, this);
+				BX.addCustomEvent(slider, 'SidePanel.Slider:onCloseComplete', this.closeSomeSliderHandler);
+			}
+		},
+
+		bindMessengerPopup: function() {
+			if (BX.MessengerWindow)
+			{
+				BX.addCustomEvent(BX.MessengerWindow, 'OnMessengerWindowShowPopup', BX.delegate(function() {
+					this.isMessengerOpen = true;
+					BX.onCustomEvent(this, 'messengerOpen');
+					this.bindMessengerClose();
+				}, this));
+			}
+		},
+
+		bindHelpdeskActions: function() {
+			window.addEventListener('message', this.windowMessageHandler.bind(this), false);
+		},
+
+		windowMessageHandler: function(message) {
+			const regExp = /^https?:\/\/(helpdesk\.bitrix24)\.(?:com\.br|com\.tr|com|de|es|it|pl|fr|ru|ua)$/;
+			const origin = message.origin.match(regExp);
+			const base = this.helpdeskDomain.match(regExp);
+			if (!origin || !base || origin[1] !== base[1])
+			{
+				return;
+			}
+
+			this.handleAction(message.data);
+		},
+
+		handleAction: function(data) {
+			if(data && data.action)
+			{
+				switch (data.action)
+				{
+					case 'openUrlInternal':
+						const url = data.url
+						if(url && url.length > 0)
+						{
+							location.replace(url);
+						}
+						break;
+					case 'openInvite':
+						const invite = this.Actions.InviteUserDialog;
+						if(invite && invite.isExists())
+						{
+							if(BX.UI && BX.UI.InfoHelper)
+							{
+								BX.UI.InfoHelper.close();
+							}
+							invite.open();
+						}
+						break;
+				}
+			}
+		},
+
+		bindMessengerClose: function() {
+			if (BX.MessengerWindow)
+			{
+				this.closeMessengerHandler = BX.delegate(function() {
+					this.isMessengerOpen = false;
+					BX.onCustomEvent(this, 'messengerClose');
+					BX.removeCustomEvent(BX.MessengerWindow, 'OnMessengerWindowClosePopup', this.closeMessengerHandler);
+				}, this);
+				BX.addCustomEvent(BX.MessengerWindow, 'OnMessengerWindowClosePopup', this.closeMessengerHandler);
+			}
+		},
+
+		bindHelperSliderClose: function(slider) {
+			if (slider)
+			{
+				this.closeHelpSliderHandler = BX.delegate(function() {
+					BX.onCustomEvent(this, 'helperSliderClose');
+					BX.removeCustomEvent(slider, 'SidePanel.Slider:onCloseComplete', this.closeHelpSliderHandler);
+					this.isHelperSliderOpen = false;
+				}, this);
+				BX.addCustomEvent(slider, 'SidePanel.Slider:onCloseComplete', this.closeHelpSliderHandler);
+			}
+		},
+
+		bindEditorToolPanelCloseEvent: function(targetWindow) {
+			targetWindow = targetWindow || window;
+			if(targetWindow.BX && BX.type.isFunction(targetWindow.BX.addCustomEvent))
+			{
+				targetWindow.BX.addCustomEvent('BX.Crm.EntityEditor:onRelease', BX.delegate(function() {
+					this.log('BX.Crm.EntityEditor:onRelease');
+					BX.onCustomEvent(this, 'crmEntityEditorRelease');
+				}, this));
+				targetWindow.BX.addCustomEvent('onCrmEntityUpdate', BX.delegate(function() {
+					this.log('onCrmEntityUpdate');
+					BX.onCustomEvent(this, 'crmEntityEditorRelease');
+				}, this));
+			}
+		},
+
+		isConditionsSatisfied: function(notification, type) {
+			var isSatisfied = false;
+			var isDeniedToShow = false;
+			const isTutorial = type === 'tutorials';
+			if (!this.hasInitErrors())
+			{
+				const isSettingsPage = this.isSettingsPage();
+				isSatisfied = !isSettingsPage;
+				this.log('is settings page', isSettingsPage);
+				if (notification.hasOwnProperty('CONDITIONS'))
+				{
+					var conditions = notification.CONDITIONS;
+
+					if (conditions.hasOwnProperty('PAGE_TEMPLATE') && isSatisfied && !isTutorial)
+					{
+						isSatisfied = this.isPageTemplateSatisfied(conditions.PAGE_TEMPLATE);
+						this.log('is satisfied by page template', isSatisfied);
+					}
+
+					if (conditions.hasOwnProperty('DATE_FROM') && isSatisfied)
+					{
+						isSatisfied = this.isDateFromShowSatisfied(conditions.DATE_FROM);
+						this.log('is satisfied by date from', isSatisfied);
+					}
+
+					if (conditions.hasOwnProperty('DATE_TO') && isSatisfied)
+					{
+						isSatisfied = this.isDateToShowSatisfied(conditions.DATE_TO);
+						this.log('is satisfied by date to', isSatisfied);
+					}
+				}
+
+				if (!isTutorial && !notification.IS_READ_REQUIRED)
+				{
+					var maxShowCounter = 1;
+					if (notification.hasOwnProperty('MAX_SHOW_COUNTER') && !isNaN(notification.MAX_SHOW_COUNTER))
+					{
+						maxShowCounter = parseInt(notification.MAX_SHOW_COUNTER);
+					}
+
+					if (notification.hasOwnProperty('SHOW_COUNTER') && !isNaN(notification.SHOW_COUNTER))
+					{
+						var currentCounter = parseInt(notification.SHOW_COUNTER);
+						if (currentCounter >= maxShowCounter)
+						{
+							isDeniedToShow = true;
+							this.log('is denied to show by counter');
+						}
+					}
+				}
+			}
+
+			if (isDeniedToShow)
+			{
+				isSatisfied = false;
+			}
+
+			return isSatisfied;
+		},
+
+		addNotifyDataParams: function(data) {
+			data = data || {};
+			for (var notifyKey in this.notifyData)
+			{
+				if (this.notifyData.hasOwnProperty(notifyKey))
+				{
+					data[notifyKey] = this.notifyData[notifyKey];
+				}
+			}
+		},
+
+		addRuntimeParams: function(data) {
+			data = data || {};
+			const now = new Date();
+			data.timestamp = now.getTime();
+			data.offset = now.getTimezoneOffset();
+			if (window.navigator)
+			{
+				data.clientUserAgent = window.navigator.userAgent;
+			}
+			if (window.location)
+			{
+				data.url = window.location.toString();
+			}
+		},
+
+		isPageTemplateSatisfied: function(pageTemplates) {
+			pageTemplates = pageTemplates || [];
+
+			var isSatisfied = false;
+
+			if (pageTemplates.length === 0)
+			{
+				isSatisfied = true;
+			}
+			else
+			{
+				var currentLocationString = location.pathname + location.search;
+
+				if (currentLocationString.length > 0)
+				{
+					for (var i = 0; i < pageTemplates.length; i++)
+					{
+						var pageTemplateRegExp = this.getRegExpFromTemplate(pageTemplates[i]);
+						this.log(pageTemplateRegExp, currentLocationString);
+
+						if (pageTemplateRegExp.test(currentLocationString))
+						{
+							isSatisfied = true;
+							this.log('location satisfied', currentLocationString);
+							break;
+						}
+					}
+				}
+			}
+
+			return isSatisfied;
+		},
+
+		isSettingsPage: function() {
+			return this.isPageTemplateSatisfied([
+				'/settings/order/*',
+				'/settings/license_all.php',
+				'/settings/license_buy.php',
+				'/settings/support.php',
+			]);
+		},
+
+		clearTutorialData: function() {
+			BX.userOptions.del(this.userOptionsCategory, this.userOptionsName);
+			this.saveCurrentAction('');
+		},
+
+		clearNotificationData: function() {
+			this.notificationList = [];
+			this.saveNotifications(true);
+			this.setLastShowDate('BASE', 0);
+			this.setLastShowDate('TOUR', 0);
+			this.setLastShowDate('SHUTTER', 0);
+		},
+
+		isDateFromShowSatisfied: function(dateTimeFromShow) {
+			dateTimeFromShow = dateTimeFromShow || '';
+			let isSatisfied = false;
+			if (BX.type.isNotEmptyString(dateTimeFromShow))
+			{
+				let dateTimeNow = new Date();
+				let dateTimeFrom = new Date(dateTimeFromShow);
+				dateTimeNow.setTime(this.timeNow * 1000);
+				if (dateTimeNow.getTime() >= dateTimeFrom.getTime())
+				{
+					isSatisfied = true;
+				}
+			}
+
+			return isSatisfied;
+		},
+
+		isDateToShowSatisfied: function(dateTimeToShow) {
+			dateTimeToShow = dateTimeToShow || '';
+			let isSatisfied = false;
+			if (BX.type.isNotEmptyString(dateTimeToShow))
+			{
+				let dateTimeNow = new Date();
+				let dateTimeTo = new Date(dateTimeToShow);
+				dateTimeNow.setTime(this.timeNow * 1000);
+				if (dateTimeNow.getTime() < dateTimeTo.getTime())
+				{
+					isSatisfied = true;
+				}
+			}
+
+			return isSatisfied;
+		},
+
+		getReplaceMap: function() {
+			return {
+				'#ANY_SYMBOLS#': '(.*)',
+				'#NUMBER#': '\\d+'
+			};
+		},
+
+		getRegExpFromTemplate: function(pageTemplate) {
+			let resultTemplate = pageTemplate;
+			let i = 0;
+
+			while (resultTemplate.indexOf('*') !== -1 && i < 50)
+			{
+				resultTemplate = resultTemplate.replace('*', '#ANY_SYMBOLS#');
+				i++;
+			}
+
+			resultTemplate = BX.util.escapeRegExp(resultTemplate);
+
+			let replaceMap = this.getReplaceMap();
+			if (replaceMap)
+			{
+				for (let search in replaceMap)
+				{
+					if (replaceMap.hasOwnProperty(search))
+					{
+						resultTemplate = resultTemplate.replace(new RegExp(search, 'g'), replaceMap[search]);
+					}
+				}
+			}
+
+			return new RegExp(resultTemplate);
+		},
+
+		hasInitErrors: function() {
+			return this.initErrors.length > 0;
+		},
+
+		addInitError: function(error) {
+			this.initErrors.push(error);
+		},
+
+		addError: function(error) {
+			this.errors.push(error);
+		},
+
+		getCheckNotificationsDelay: function() {
+			return 43200;
+		},
+
+		getCheckTutorialsDelay: function() {
+			return 43200;
+		},
+
+		getIncorrectTutorialsDelay: function() {
+			return 3600;
+		},
+
+		getAllErrors: function() {
+			return {
+				init: this.initErrors,
+				common: this.errors
+			};
+		},
+
+		isDeniedToHideBlock: function() {
+			return this.isDeniedBlockToHide === true;
+		},
+
+		setDeniedToHideBlock: function(sourceObject, isDeniedBlockToHide) {
+			if (sourceObject instanceof BX.External.NotificationAnniversaryConfetti)
+			{
+				this.isDeniedBlockToHide = isDeniedBlockToHide === true;
+			}
+		},
+
+		initEventManager: function(entity) {
+			if (entity)
+			{
+				if (BX.External && BX.External.Notification && BX.External.Notification.Event)
+				{
+					this.processInitEventManager(entity);
+				}
+				else
+				{
+					BX.addCustomEvent(BX.External, this.getLoadEventManagerEvent(), BX.delegate(function() {
+						this.processInitEventManager(entity);
+					}, this));
+				}
+			}
+		},
+		processInitEventManager: function(entity) {
+			if (entity)
+			{
+				let eventManager = new BX.External.Notification.Event({
+					entity: entity
+				});
+				if (BX.type.isFunction(entity.setEventManager))
+				{
+					entity.setEventManager(eventManager);
+				}
+			}
+		},
+		prepareUrl: function(path) {
+			let helpdeskDomain = this.helpdeskDomain;
+			if (helpdeskDomain)
+			{
+				return helpdeskDomain + path;
+			}
+			else
+			{
+				this.addInitError(new Error('HELPDESK_DOMAIN_NOT_DEFINED'));
+			}
+
+			return '';
+		},
+		log: function() {
+			if (this.debug)
+			{
+				console.log.apply(this, arguments);
+			}
+		},
+		changeTutorButtonLoadingAnimation: function(isRemove) {
+			isRemove = isRemove === true;
+			const waitClass = 'ui-btn-wait';
+			const startBtn = BX.UI.Tutor.Manager.getStartBtn();
+			const repeatBtn = BX.UI.Tutor.Manager.getRepeatBtn();
+			if(isRemove)
+			{
+				BX.Dom.removeClass(startBtn, waitClass);
+				BX.Dom.removeClass(repeatBtn, waitClass);
+			}
+			else
+			{
+				BX.Dom.addClass(startBtn, waitClass);
+				BX.Dom.addClass(repeatBtn, waitClass);
+			}
+		},
+		getTopSliderZIndex: function()
+		{
+			let index = null;
+			if (BX.SidePanel && BX.SidePanel.Instance && BX.SidePanel.Instance.getTopSlider() && BX.SidePanel.Instance.getTopSlider().hasOwnProperty('zIndex'))
+			{
+				index = BX.SidePanel.Instance.getTopSlider().zIndex;
+			}
+
+			return index;
+		},
+		getUserInitEventCode: function() {
+			return 'userInit';
+		}
+	};
+
+	Object.defineProperties(
+		BX.External.Notification.Manager,
+		{
+			loaderExists: {
+				get: function() {
+					return !!(this.loader && this.loader instanceof BX.Intranet.Helper.Notification.Loader);
+				}
+			},
+			ajaxUrl: {
+				get: function() {
+					if (this.loaderExists)
+					{
+						return this.loader.getAjaxUrl() || '';
+					}
+					return '';
+				}
+			},
+			helper: {
+				get: function() {
+					if (this.loaderExists)
+					{
+						return this.loader.helper || null;
+					}
+					return null;
+				}
+			},
+			helperFrameUrl: {
+				get: function() {
+					return 'main:helper';
+				}
+			},
+			notifyData: {
+				get: function() {
+					if (this.loaderExists)
+					{
+						return this.loader.getNotifyData() || {};
+					}
+					return {};
+				}
+			},
+			helpdeskDomain: {
+				get: function() {
+					if (this.loaderExists)
+					{
+						return this.loader.getHelpUrl() || '';
+					}
+					return '';
+				}
+			},
+			timeNow: {
+				get: function() {
+					if (this.loaderExists)
+					{
+						return this.loader.getTimeNow() || '';
+					}
+					return '';
+				}
+			},
+			lastCheckNotificationsTime: {
+				get: function() {
+					if (this.loaderExists)
+					{
+						return this.loader.getLastCheckNotificationsTime() || '';
+					}
+					return '';
+				}
+			},
+			currentNotificationsString: {
+				get: function() {
+					if (this.loaderExists)
+					{
+						return this.loader.getCurrentNotificationsString() || '';
+					}
+					return '';
+				}
+			},
+			getNotificationUrl: {
+				get: function() {
+					return this.prepareUrl('/widget2/get_notification.php');
+				}
+			},
+			clearNotificationUrl: {
+				get: function() {
+					return this.prepareUrl('/widget2/clear_notification.php');
+				}
+			},
+			checkIsNotificationExistsUrl: {
+				get: function() {
+					return this.prepareUrl('/widget2/check_is_exists.php');
+				}
+			},
+			checkNotificationsUrl: {
+				get: function() {
+					return this.prepareUrl('/widget2/check_notifications.php');
+				}
+			},
+			checkTutorialsUrl: {
+				get: function() {
+					return this.prepareUrl('/widget2/check_tutorials.php');
+				}
+			},
+		}
+	);
+
+	BX.External.Notification.Manager.Actions = {
+		InviteUserDialog: {
+			CODE: 'SHOW_INVITE',
+			open: function() {
+				if (this.isExists())
+				{
+					const node = this.node;
+					node.onclick.apply(node);
+				}
+			},
+			isExists: function() {
+				return BX.type.isElementNode(this.node);
+			},
+			checkNode: function() {
+				if (!this.hasOwnProperty('dialogNode'))
+				{
+					this.dialogNode = null;
+					let openDialogJsCode = null;
+					let node = document.querySelector('.menu-invite-employees');
+					if (BX.type.isElementNode(node))
+					{
+						openDialogJsCode = node.onclick;
+						if (BX.type.isFunction(openDialogJsCode))
+						{
+							this.dialogNode = node;
+						}
+					}
+					if(!this.dialogNode)
+					{
+						node = document.querySelector('.menu-invite-employees-text');
+						if (BX.type.isElementNode(node))
+						{
+							openDialogJsCode = node.onclick;
+							if (BX.type.isFunction(openDialogJsCode))
+							{
+								this.dialogNode = node;
+							}
+						}
+					}
+				}
+			},
+			get node()
+			{
+				this.checkNode();
+
+				return this.dialogNode;
+			},
+		},
+		CrmDealPanel: {
+			CODE: 'OPEN_DEAL_DIALOG',
+			isOpened: false,
+			isStartOpen: false,
+			existedDealId: 0,
+			notExistDealPopup: null,
+			isExists: function() {
+				return true;
+			},
+			isOpenOnlyThisSlider: function() {
+				return this.isStartOpen && BX.SidePanel.Instance.openSliders.length === 1;
+			},
+			getPathForDeal: function(dealId) {
+				if (isNaN(dealId))
+				{
+					dealId = 0;
+				}
+
+				return this.path.replace(this.dealIdPlace, dealId);
+			},
+			getDealEditorPattern: function() {
+
+			},
+			getCurrentDealEditorToolPanel: function() {
+				let toolPanel = null;
+				const dealId = this.existedDealId;
+				let targetWindow = window;
+				if (BX.SidePanel && BX.SidePanel.Instance && BX.SidePanel.Instance.getTopSlider())
+				{
+					const topSlider = BX.SidePanel.Instance.getTopSlider();
+					if (topSlider)
+					{
+						targetWindow = topSlider.getFrameWindow();
+					}
+				}
+				if (targetWindow && targetWindow.BX && targetWindow.BX.Crm && targetWindow.BX.Crm.EntityEditor && dealId)
+				{
+					const editorClass = targetWindow.BX.Crm.EntityEditor;
+					if (BX.type.isFunction(editorClass.get))
+					{
+						const editor = editorClass.get(this.dealEditorId.replace(this.dealIdPlace, dealId));
+						if (editor instanceof editorClass)
+						{
+							toolPanel = editor._toolPanel;
+						}
+					}
+				}
+
+				return toolPanel;
+			},
+			fireOpenEditorToolBarEvent: function() {
+				BX.onCustomEvent(BX.External.Notification.Manager, 'openDealEditorToolPanel');
+			},
+			bindDealEditorToolPanelEvent: function() {
+				if (!this.dealEditorToolPanel)
+				{
+					this.dealEditorToolPanel = this.getCurrentDealEditorToolPanel();
+				}
+				if (this.dealEditorToolPanel)
+				{
+					this.panelStateIntervalHandler = BX.delegate(function() {
+						if (!this.toolPanelIsVisible)
+						{
+							if (this.dealEditorToolPanel && this.dealEditorToolPanel.isVisible())
+							{
+								this.toolPanelIsVisible = true;
+								this.fireOpenEditorToolBarEvent();
+							}
+						}
+					}, this);
+					this.checkPanelStateInterval = setInterval(this.panelStateIntervalHandler, 1000);
+					BX.addCustomEvent(BX.External.Notification.Manager, 'crmEntityEditorRelease', BX.delegate(function() {
+						this.toolPanelIsVisible = false;
+					}, this));
+				}
+			},
+			openExisted: function(onLoadCallback, onCloseCallback, onNotFoundCallback) {
+				const dealId = this.getDealDetailIdFromPath();
+				const fullOnLoadCallback = BX.delegate(function() {
+					this.bindDealEditorToolPanelEvent();
+					onLoadCallback();
+				}, this);
+				if (this.isExistedDealId(dealId))
+				{
+					fullOnLoadCallback();
+				}
+				else
+				{
+					BX.External.Notification.Manager.changeTutorButtonLoadingAnimation();
+					const openFunction = BX.delegate(function(result) {
+						result = result || {};
+						if (result.status === 200 &&
+							result.answer &&
+							BX.type.isArray(result.answer.result) &&
+							result.answer.result.length > 0
+						)
+						{
+							const deal = result.answer.result[0];
+							this.existedDealId = deal.ID;
+							this.open(this.existedDealId, fullOnLoadCallback, onCloseCallback);
+						}
+						else
+						{
+							if (this.notExistDealPopup instanceof BX.PopupWindow)
+							{
+								this.notExistDealPopup.show();
+							}
+							else if (BX.PopupWindow && !this.notExistDealPopup)
+							{
+								this.notExistDealPopup = new BX.PopupWindow(
+									{
+										lightShadow : true,
+										closeIcon : false,
+										closeByEsc : true,
+										autoHide: true,
+										className: '',
+										overlay: {
+											backgroundColor: '#000', opacity: 50
+										},
+									}
+								);
+								this.notExistDealPopup.setContent('<span style="font-size: 18px;">Создайте сделку, чтобы перейти к этому шагу.</span>');
+								this.notExistDealPopup.show();
+							}
+							else if (!this.notExistDealPopup)
+							{
+								alert('Создайте сделку, чтобы перейти к этому шагу.');
+							}
+							else
+							{
+								this.notExistDealPopup = {};
+								alert('Создайте сделку, чтобы перейти к этому шагу.');
+							}
+							if(BX.type.isFunction(onNotFoundCallback))
+							{
+								onNotFoundCallback();
+							}
+						}
+					}, this);
+					if (this.existedDealId > 0)
+					{
+						this.open(this.existedDealId, fullOnLoadCallback, onCloseCallback);
+					}
+					else
+					{
+						BX.rest.callMethod('crm.deal.list', {
+							start: -1,
+							select: ["ID"]
+						}, openFunction);
+					}
+				}
+			},
+			open: function(dealId, onLoadCallback, onCloseCallback) {
+				if (BX.type.isFunction(onLoadCallback))
+				{
+					const topSlider = BX.SidePanel.Instance.getTopSlider();
+					const path = this.getPathForDeal(dealId);
+					if (topSlider && topSlider.getUrl() === path)
+					{
+						if (!this.isOpened)
+						{
+							this.isStartOpen = true;
+							this.isOpened = true;
+						}
+						onLoadCallback();
+					}
+					else if (!this.isStartOpen && !this.isOpened)
+					{
+						this.isStartOpen = true;
+						BX.SidePanel.Instance.open(
+							path,
+							{
+								events: {
+									onLoad: BX.delegate(function(event) {
+										const frameWindow = event.getSlider().getFrameWindow();
+										frameWindow.document.documentElement.style.overflow = 'hidden';
+										BX.External.NotificationManager.bindEditorToolPanelCloseEvent(frameWindow);
+										this.isOpened = true;
+										BX.External.Notification.Manager.changeTutorButtonLoadingAnimation(true);
+										onLoadCallback();
+									}, this),
+									onClose: BX.delegate(function() {
+										if (BX.type.isFunction(onCloseCallback))
+										{
+											onCloseCallback();
+										}
+									}, this),
+									onCloseComplete: BX.delegate(function() {
+										this.isOpened = false;
+										this.isStartOpen = false;
+										clearInterval(this.checkPanelStateInterval);
+										this.dealEditorToolPanel = null;
+										this.toolPanelIsVisible = false;
+									}, this)
+								}
+							}
+						);
+					}
+				}
+			},
+			getDealDetailIdFromPath: function() {
+				let dealId = 0;
+				const pattern = this.path.replace(this.dealIdPlace, '(\\d+)');
+				const dealDetail = new RegExp(pattern);
+				const matches = window.location.pathname.match(dealDetail);
+				if (BX.type.isArray(matches))
+				{
+					dealId = parseInt(matches[1]);
+				}
+
+				return dealId;
+			},
+			isExistedDealId: function(dealId) {
+				return !!(dealId > 0 && ((BX.Crm && BX.Crm.EntityEditor) || this.isOpened));
+			},
+			init: function() {
+				const dealId = this.getDealDetailIdFromPath();
+				if(this.isExistedDealId(dealId))
+				{
+					this.existedDealId = dealId;
+					this.bindDealEditorToolPanelEvent();
+				}
+			},
+			get path()
+			{
+				return '/crm/deal/details/' + this.dealIdPlace + '/';
+			},
+			get dealEditorId()
+			{
+				return 'deal_' + this.dealIdPlace + '_details_editor';
+			},
+			get dealIdPlace()
+			{
+				return '#DEAL_ID#';
+			}
+		},
+		TaskPanel: {
+			CODE: 'OPEN_TASK_DIALOG',
+			isOpened: false,
+			isStartOpen: false,
+			existedTaskId: 0,
+			isExists: function() {
+				return true;
+			},
+			getPathForTask: function(taskId) {
+				if (isNaN(taskId))
+				{
+					taskId = 0;
+				}
+
+				return this.path.replace(this.taskIdPlace, taskId);
+			},
+			openExisted: function(onLoadCallback, onCloseCallback) {
+				const taskId = this.getTaskDetailIdFromPath();
+				if (taskId > 0)
+				{
+					onLoadCallback();
+				}
+				else
+				{
+					BX.External.Notification.Manager.changeTutorButtonLoadingAnimation();
+					const openFunction = BX.delegate(function(result) {
+						result = result || {};
+						if (result.status === 200 &&
+							result.answer &&
+							BX.type.isArray(result.answer.result) &&
+							result.answer.result.length > 0
+						)
+						{
+							const task = result.answer.result[0];
+							this.existedTaskId = task.ID;
+							this.open(this.existedTaskId, onLoadCallback, onCloseCallback);
+						}
+						else
+						{
+
+						}
+					}, this);
+					if (this.existedTaskId > 0)
+					{
+						this.open(this.existedTaskId, onLoadCallback, onCloseCallback);
+					}
+					else
+					{
+						BX.rest.callMethod('tasks.task.list', {
+							start: -1,
+							select: ["ID"]
+						}, openFunction);
+					}
+				}
+			},
+			open: function(taskId, onLoadCallback, onCloseCallback) {
+				if (BX.type.isFunction(onLoadCallback))
+				{
+					const topSlider = BX.SidePanel.Instance.getTopSlider();
+					const path = this.getPathForTask(taskId);
+					if (topSlider && topSlider.getUrl() === path)
+					{
+						if (!this.isOpened)
+						{
+							this.isStartOpen = true;
+							this.isOpened = true;
+						}
+						onLoadCallback();
+					}
+					else if (!this.isStartOpen && !this.isOpened)
+					{
+						this.isStartOpen = true;
+						BX.SidePanel.Instance.open(
+							path,
+							{
+								events: {
+									onLoad: BX.delegate(function(event) {
+										event.getSlider().iframe.contentWindow.document.documentElement.style.overflow = 'hidden';
+										this.isOpened = true;
+										BX.External.Notification.Manager.changeTutorButtonLoadingAnimation(true);
+										onLoadCallback();
+									}, this),
+									onClose: BX.delegate(function() {
+										if (BX.type.isFunction(onCloseCallback))
+										{
+											onCloseCallback();
+										}
+									}, this),
+									onCloseComplete: BX.delegate(function() {
+										this.isOpened = false;
+										this.isStartOpen = false;
+									}, this)
+								}
+							}
+						);
+					}
+				}
+			},
+			getTaskDetailIdFromPath: function() {
+				let taskId = 0;
+				const pattern = this.path.replace(this.taskIdPlace, '(\\d+)');
+				const taskDetail = new RegExp(pattern);
+				const matches = window.location.pathname.match(taskDetail);
+				if (BX.type.isArray(matches))
+				{
+					taskId = parseInt(matches[1]);
+				}
+
+				return taskId;
+			},
+			get path()
+			{
+				return '/company/personal/user/' + BX.message('USER_ID') + '/tasks/task/edit/' + this.taskIdPlace + '/';
+			},
+			get taskIdPlace()
+			{
+				return '#TASK_ID#';
+			}
+		},
+		OpenSlider: {
+			CODE: 'OPEN_SLIDER',
+			isOpened: false,
+			isStartOpen: false,
+			isExists: function() {
+				return BX.UI && BX.UI.InfoHelper;
+			},
+			open: function(code, width) {
+				BX.UI.InfoHelper.show(code);
+				width = parseInt(width);
+				if (!isNaN(width) && width >= 240 && BX.UI.InfoHelper.getSlider())
+				{
+					BX.UI.InfoHelper.getSlider().setWidth(width);
+					BX.UI.InfoHelper.getSlider().adjustLayout();
+				}
+			},
+		}
+	};
+
+	BX.External.Notification.Manager.Actions.CrmDealPanel.init();
+	BX.External.Notification.Manager.init();
+})();
