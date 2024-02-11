@@ -1,13 +1,15 @@
 <?php
-include "array.php";
-include "marking.php";
+include("array.php");
+include("marking.php");
 
-if (isset($_GET['type']) && ($_GET['type'] == "array" || $_GET['type'] == "json")) {
-    $typeFlag = $_GET['type'];
+if (isset($_GET["type"]) && ($_GET["type"] == "array" || $_GET["type"] == "json")) {
+    $typeFlag = $_GET["type"];
+
     $arInf = [];
+
     if ($typeFlag === "array") {
         $arInf = $arData;
-    } else if ($typeFlag === "json") {
+    } elseif ($typeFlag === "json") {
         $jsonKeys = file_get_contents("data.json");
         $arInf = json_decode($jsonKeys, true);
     }?>
@@ -24,39 +26,6 @@ if (isset($_GET['type']) && ($_GET['type'] == "array" || $_GET['type'] == "json"
         <link rel="apple-touch-icon-precomposed" sizes="72x72" href="https://b24-hfbu5j.bitrix24.ru/images/iphone/72x72.png">
         <link rel="apple-touch-icon-precomposed" sizes="114x114" href="https://b24-hfbu5j.bitrix24.ru/images/iphone/114x114.png">
         <link rel="apple-touch-icon-precomposed" sizes="144x144" href="https://b24-hfbu5j.bitrix24.ru/images/iphone/144x144.png">
-        <script type="text/javascript" async="" src="./news_files/ba.js.Без названия"></script>
-        <script type="text/javascript" data-skip-moving="true">
-            (function(w, d, n) {
-                var cl = "bx-core";
-                var ht = d.documentElement;
-                var htc = ht ? ht.className : undefined;
-                if (htc === undefined || htc.indexOf(cl) !== -1) {
-                    return;
-                }
-                var ua = n.userAgent;
-                if (/(iPad;)|(iPhone;)/i.test(ua)) {
-                    cl += " bx-ios";
-                } else if (/Windows/i.test(ua)) {
-                    cl += ' bx-win';
-                } else if (/Macintosh/i.test(ua)) {
-                    cl += " bx-mac";
-                } else if (/Linux/i.test(ua) && !/Android/i.test(ua)) {
-                    cl += " bx-linux";
-                } else if (/Android/i.test(ua)) {
-                    cl += " bx-android";
-                }
-                cl += (/(ipad|iphone|android|mobile|touch)/i.test(ua) ? " bx-touch" : " bx-no-touch");
-                cl += w.devicePixelRatio && w.devicePixelRatio >= 2 ? " bx-retina" : " bx-no-retina";
-                var ieVersion = -1;
-                if (/AppleWebKit/.test(ua)) {
-                    cl += " bx-chrome";
-                } else if (/Opera/.test(ua)) {
-                    cl += " bx-opera";
-                } else if (/Firefox/.test(ua)) {
-                    cl += " bx-firefox";
-                }
-                ht.className = htc ? htc + " " + cl : cl;
-            })(window, document, navigator);
         </script>
         <link href="./news_files/intranet-common.min.css" type="text/css" rel="stylesheet">
         <link href="./news_files/ui.design-tokens.min.css" type="text/css" rel="stylesheet">
@@ -227,16 +196,20 @@ if (isset($_GET['type']) && ($_GET['type'] == "array" || $_GET['type'] == "json"
                     <div>
                         <!-- цикл -->
                         <?php
-                        foreach ($arInf as $key => $value) {
+                        foreach ($arInf as $value) {
                             $arM = $arMarking[$value["marking"]];
+
                             if ($value["type"] == "withoutTitle") {
                                 echo $arM["start"] . $value["value"] . $arM["end"];
                             } elseif ($value["type"] == "element") {
                                 echo $arM["start"] . $value["title"] . $arM["afterTitle"];
-                                foreach ($value["value"] as $k => $v) {
+
+                                foreach ($value["value"] as $v) {
                                     echo $arM["itemStart"] . $v . $arM["itemEnd"];
                                 }
+
                                 echo $arM["afterItems"] . $value["option"]["button"]["name"] . $arM["afterButton"];
+
                                 if (array_key_exists("extraButton", $value["option"])) {
                                     echo $arM["extraButtonStart"] . $value["option"]["extraButton"]["name"] . $arM["extraButtonEnd"];
                                 }
@@ -245,15 +218,19 @@ if (isset($_GET['type']) && ($_GET['type'] == "array" || $_GET['type'] == "json"
                                 echo $arM["start"] . $value["title"] . $arM["afterTitle"] . $value["option"]["checked"] . $arM["isChecked"] . $value["value"] . $arM["end"];
                             } elseif ($value["type"] == "deadline") {
                                 echo $arM["start"] . $value["title"] . $arM["afterTitle"] . $value["value"] . $arM["afterValue"];
-                                foreach ($value["option"]["extraButton"] as $k => $v) {
+
+                                foreach ($value["option"]["extraButton"] as $v) {
                                     echo $arM["buttonStart"] . $v["name"] . $arM["buttonEnd"];
                                 }
+
                                 echo $arM["end"];
                             } elseif ($value["type"] == "reminder") {
                                 echo $arM["start"] . $value["title"] . $arM["afterTitle"];
-                                foreach ($value["value"] as $k => $v) {
+
+                                foreach ($value["value"] as $v) {
                                     echo $arM["itemStart"] . $v . $arM["itemEnd"];
                                 }
+
                                 echo $arM["end"];
                             }
                         }

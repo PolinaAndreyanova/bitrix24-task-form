@@ -51,7 +51,7 @@ $arMarking = [
         "end" => '
                 </div>
             </div>
-        ',
+        '
     ],
     "checkbox" => [
         "start" => '
@@ -74,7 +74,7 @@ $arMarking = [
                     </div>
                 </div>
             </div>
-        ',
+        '
     ],
     "deadline" => [
         "start" => '
@@ -100,7 +100,7 @@ $arMarking = [
         "end" => '
                     </span>		
                 </div>
-            </div>',
+            </div>'
     ],
     "reminder" => [
         "start" => '
